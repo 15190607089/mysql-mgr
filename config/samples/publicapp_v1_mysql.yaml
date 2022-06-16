@@ -1,0 +1,7 @@
+apiVersion: publicapp.emergen.cn/v1
+kind: Mysql
+metadata:
+  name: mysql
+spec:
+  namespace: dev
+  replicas: 1
