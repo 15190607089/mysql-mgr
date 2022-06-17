@@ -19,6 +19,7 @@ mv kubebuilder_linux_amd64 /usr/local/bin/kubebuilder
 初始化项目：
 ```
 mkdir /data/go/mysql
+cd /data/go/mysql
 kubebuilder init --domain emergen.cn --repo mysqlmgr
 kubebuilder create api --group publicapp --version v1 --kind Mysql
 make manifests
