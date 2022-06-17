@@ -1,5 +1,6 @@
 # mysql-mgr
 ## 以下操作须在有kubectl和docker命令的节点上运行
+### 注意：本operator须在dev名称空间下，若要更换namespace，先修改controller代码配置主从的master地址，在修改cr文件的namespace。
 
 安装go，版本1.17：
 
