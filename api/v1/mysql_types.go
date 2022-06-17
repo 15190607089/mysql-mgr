@@ -29,8 +29,8 @@ type MysqlSpec struct {
 	// Important: Run "make" to regenerate code after modifying this file
 
 	// Foo is an example field of Mysql. Edit mysql_types.go to remove/update
-	Replicas  int    `json:"replicas"`
-	Namespace string `json:"namespace,omitempty"`
+	Replicas     int    `json:"replicas"`
+	Storageclass string `json:"storageclass"`
 }
 
 // MysqlStatus defines the observed state of Mysql

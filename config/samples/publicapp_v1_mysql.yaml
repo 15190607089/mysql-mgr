@@ -2,6 +2,7 @@ apiVersion: publicapp.emergen.cn/v1
 kind: Mysql
 metadata:
   name: mysql
-spec:
   namespace: dev
+spec:
+  storageclass: managed-nfs-storage
   replicas: 1

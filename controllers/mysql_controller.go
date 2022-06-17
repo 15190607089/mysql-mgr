@@ -18,22 +18,19 @@ package controllers
 
 import (
 	"context"
-	"fmt"
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/apps/v1"
 	v14 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	v12 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	publicappv1 "mysqlmgr/api/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
 // MysqlReconciler reconciles a Mysql object
@@ -46,6 +43,10 @@ type MysqlReconciler struct {
 //+kubebuilder:rbac:groups=publicapp.emergen.cn,resources=mysqls,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=publicapp.emergen.cn,resources=mysqls/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=publicapp.emergen.cn,resources=mysqls/finalizers,verbs=update
+//+kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -68,63 +69,58 @@ func (r *MysqlReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		}
 		return ctrl.Result{}, err
 	}
-	lbs := labels.Set{"app": instance.Name}
-	statefulSetList := &v1.StatefulSetList{}
-	mapList := &v14.ConfigMapList{}
-	serviceList := &v14.ServiceList{}
-	if err := r.Client.List(ctx, statefulSetList, &client.ListOptions{
-		Namespace: req.Namespace, LabelSelector: labels.SelectorFromSet(lbs)}); err != nil {
-		logger.Error(err, "fetching exist statefulset failed")
+
+	//statefulset逻辑
+	statefulSet := &v1.StatefulSet{}
+	statful := newStatful(instance)
+	err := controllerutil.SetControllerReference(instance, statful, r.Scheme)
+	if err != nil {
+		logger.Info("scale up failed: setcontrollerreference")
 		return ctrl.Result{}, err
 	}
-	if err := r.Client.List(ctx, mapList, &client.ListOptions{
-		Namespace: req.Namespace, LabelSelector: labels.SelectorFromSet(lbs)}); err != nil {
-		logger.Error(err, "fetching exist configmap failed")
+	if err := r.Get(ctx, types.NamespacedName{Namespace: instance.Namespace, Name: instance.Name}, statefulSet); errors.IsNotFound(err) {
+		logger.Info("found none statefulset,create now")
+		if err := r.Create(ctx, statful); err != nil {
+			logger.Error(err, "create statefulset failed")
+			return ctrl.Result{}, err
+		}
+	} else if err == nil {
+		if err := r.Update(ctx, statful); err != nil {
+			return ctrl.Result{}, err
+		}
+	} else {
 		return ctrl.Result{}, err
 	}
-	if err := r.Client.List(ctx, serviceList, &client.ListOptions{
-		Namespace: req.Namespace, LabelSelector: labels.SelectorFromSet(lbs)}); err != nil {
-		logger.Error(err, "fetching exist service failed")
+	//configmap逻辑
+	configMap := &v14.ConfigMap{}
+	cm := newconfigmap(instance)
+	if err := controllerutil.SetControllerReference(instance, cm, r.Scheme); err != nil {
+		logger.Info("scale up failed: setcontrollerreference")
 		return ctrl.Result{}, err
 	}
-	logger.Info(fmt.Sprintf("serviceList:%v", serviceList.Items))
-	logger.Info(fmt.Sprintf("mapList:%v", mapList.Items))
-
-	if len(statefulSetList.Items) == 0 {
-		statefulSet := newStatful(instance)
-		if err := controllerutil.SetControllerReference(instance, statefulSet, r.Scheme); err != nil {
-			logger.Info("scale up failed: setcontrollerreference")
+	if err := r.Get(ctx, types.NamespacedName{Namespace: instance.Namespace, Name: instance.Name}, configMap); errors.IsNotFound(err) {
+		logger.Info("found none configmap,create now")
+		if err := r.Create(ctx, cm); err != nil {
+			logger.Error(err, "create configmap failed")
 			return ctrl.Result{}, err
 		}
-		if err := r.Client.Create(ctx, statefulSet); err != nil {
-			logger.Info("scale up failed：create statefulset")
-			return ctrl.Result{}, err
-		}
-
+	} else if err != nil {
+		return ctrl.Result{}, err
 	}
-
-	if len(statefulSetList.Items) != 0 && len(mapList.Items) == 0 {
-		configMap := newconfigmap(instance)
-		if err := controllerutil.SetControllerReference(instance, configMap, r.Scheme); err != nil {
-			logger.Info("scale up failed: setcontrollerreference")
-			return ctrl.Result{}, err
-		}
-		if err := r.Client.Create(ctx, configMap); err != nil {
-			logger.Info("scale up failed：create configmap")
-			return ctrl.Result{}, err
-		}
-
+	//service逻辑
+	service := &v14.Service{}
+	svc := newsvc(instance)
+	if err := controllerutil.SetControllerReference(instance, svc, r.Scheme); err != nil {
+		return ctrl.Result{}, err
 	}
-	if len(statefulSetList.Items) != 0 && len(serviceList.Items) == 0 {
-		service := newsvc(instance)
-		if err := controllerutil.SetControllerReference(instance, service, r.Scheme); err != nil {
-			logger.Info("scale up failed: setcontrollerreference")
+	if err := r.Get(ctx, types.NamespacedName{Namespace: instance.Namespace, Name: instance.Name}, service); errors.IsNotFound(err) {
+		logger.Info("found none service,create now")
+		if err := r.Create(ctx, svc); err != nil {
+			logger.Error(err, "create service failed")
 			return ctrl.Result{}, err
 		}
-		if err := r.Client.Create(ctx, service); err != nil {
-			logger.Info("scale up failed：create service")
-			return ctrl.Result{}, err
-		}
+	} else if err != nil {
+		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
@@ -134,7 +130,7 @@ func newconfigmap(cr *publicappv1.Mysql) *v14.ConfigMap {
 	return &v14.ConfigMap{
 		ObjectMeta: v12.ObjectMeta{
 			Name:      cr.Name,
-			Namespace: cr.Spec.Namespace,
+			Namespace: cr.Namespace,
 			Labels:    map[string]string{"app": cr.Name},
 		},
 		Data: map[string]string{
@@ -148,7 +144,7 @@ func newsvc(cr *publicappv1.Mysql) *v14.Service {
 	return &v14.Service{
 		ObjectMeta: v12.ObjectMeta{
 			Name:      cr.Name,
-			Namespace: cr.Spec.Namespace,
+			Namespace: cr.Namespace,
 			Labels:    map[string]string{"app": cr.Name},
 		},
 		Spec: v14.ServiceSpec{
@@ -167,12 +163,12 @@ func newsvc(cr *publicappv1.Mysql) *v14.Service {
 func newStatful(cr *publicappv1.Mysql) *v1.StatefulSet {
 	lbs := map[string]string{"app": cr.Name}
 
-	scn := "managed-nfs-storage"
+	scn := cr.Spec.Storageclass
 	repls := int32(cr.Spec.Replicas)
 	return &v1.StatefulSet{
 		ObjectMeta: v12.ObjectMeta{
 			Name:      cr.Name,
-			Namespace: cr.Spec.Namespace,
+			Namespace: cr.Namespace,
 			Labels:    lbs,
 		},
 		Spec: v1.StatefulSetSpec{
@@ -376,7 +372,7 @@ func newStatful(cr *publicappv1.Mysql) *v1.StatefulSet {
 				{
 					ObjectMeta: v12.ObjectMeta{
 						Name:      "data",
-						Namespace: cr.Spec.Namespace,
+						Namespace: cr.Namespace,
 					},
 					Spec: v14.PersistentVolumeClaimSpec{
 						AccessModes: []v14.PersistentVolumeAccessMode{
@@ -394,22 +390,6 @@ func newStatful(cr *publicappv1.Mysql) *v1.StatefulSet {
 		},
 	}
 
-}
-
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
-type ResourceLabelChangedPredicate struct {
-	predicate.Funcs
-}
-
-func (r1 *ResourceLabelChangedPredicate) Delete(e event.DeleteEvent) bool {
-	instance := &publicappv1.Mysql{}
-	name := e.Object.GetName()
-	namespace := e.Object.GetNamespace()
-	if namespace == instance.Namespace && name == instance.Name {
-		return true
-	}
-
-	return false
 }
 
 // SetupWithManager sets up the controller with the Manager.
