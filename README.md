@@ -1,6 +1,7 @@
 # mysql-mgr
+## 以下操作须在有kubectl和docker命令的节点上运行
 
-安装go：
+安装go，版本1.17：
 
 ```
 yum -y install go
@@ -22,6 +23,8 @@ kubebuilder init --domain emergen.cn --repo mysqlmgr
 kubebuilder create api --group publicapp --version v1 --kind Mysql
 make manifests
 go mod tidy
+
+#本地试运行：
 make install
 make run
 ```
